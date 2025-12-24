@@ -106,10 +106,15 @@ impl TryFrom<Value> for SteelVal {
     }
 }
 
-// TODO
 impl TryFrom<Number> for SteelVal {
     type Error = SteelErr;
     fn try_from(n: Number) -> std::result::Result<Self, Self::Error> {
+        if let Some(i) = n.as_i64() {
+            if let Ok(i) = TryInto::<isize>::try_into(i) {
+                return Ok(SteelVal::IntV(i));
+            }
+        }
+
         let result = n.as_f64().unwrap();
         Ok(SteelVal::NumV(result))
     }
