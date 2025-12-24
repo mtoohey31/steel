@@ -1157,6 +1157,7 @@ pub enum FFIArg<'a> {
     Void,
     StringV(RString),
     StringMutRef(StringMutRef<'a>),
+    SymbolV(RString),
     Vector(RVec<FFIArg<'a>>),
     VectorRef(VectorRef<'a>),
     CharV {
@@ -1189,16 +1190,17 @@ impl<'a> FFIArg<'a> {
             FFIArg::Void => 4,
             FFIArg::StringV(_) => 5,
             FFIArg::StringMutRef(_) => 6,
-            FFIArg::Vector(_) => 7,
-            FFIArg::VectorRef(_) => 8,
-            FFIArg::CharV { .. } => 9,
-            FFIArg::Custom { .. } => 10,
-            FFIArg::CustomRef(..) => 11,
-            FFIArg::HashMap(_) => 12,
-            FFIArg::Future { .. } => 13,
-            FFIArg::HostFunction(_) => 14,
-            FFIArg::ByteVector(_) => 15,
-            FFIArg::ByteVectorRef(_) => 16,
+            FFIArg::SymbolV(_) => 7,
+            FFIArg::Vector(_) => 8,
+            FFIArg::VectorRef(_) => 9,
+            FFIArg::CharV { .. } => 10,
+            FFIArg::Custom { .. } => 11,
+            FFIArg::CustomRef(..) => 12,
+            FFIArg::HashMap(_) => 13,
+            FFIArg::Future { .. } => 14,
+            FFIArg::HostFunction(_) => 15,
+            FFIArg::ByteVector(_) => 16,
+            FFIArg::ByteVectorRef(_) => 17,
         }
     }
 
@@ -1209,6 +1211,7 @@ impl<'a> FFIArg<'a> {
             | FFIArg::NumV(_)
             | FFIArg::IntV(_)
             | FFIArg::StringV(_)
+            | FFIArg::SymbolV(_)
             | FFIArg::Vector(_)
             | FFIArg::CharV { .. }
             | FFIArg::ByteVector(_) => true,
@@ -1241,6 +1244,10 @@ impl<'a> std::hash::Hash for FFIArg<'a> {
             }
             FFIArg::StringV(rstring) => {
                 state.write_u8(5);
+                rstring.hash(state);
+            }
+            FFIArg::SymbolV(rstring) => {
+                state.write_u8(6);
                 rstring.hash(state);
             }
             FFIArg::Vector(rvec) => {
@@ -1322,6 +1329,7 @@ pub enum FFIValue {
     IntV(isize),
     Void,
     StringV(RString),
+    SymbolV(RString),
     Vector(RVec<FFIValue>),
     CharV {
         #[sabi(unsafe_opaque_field)]
@@ -1359,6 +1367,7 @@ impl FFIValue {
             FFIValue::IntV(i) => Some(FFIValue::IntV(*i)),
             FFIValue::Void => Some(FFIValue::Void),
             FFIValue::StringV(s) => Some(FFIValue::StringV(s.clone())),
+            FFIValue::SymbolV(s) => Some(FFIValue::SymbolV(s.clone())),
             FFIValue::CharV { c } => Some(FFIValue::CharV { c: *c }),
             _ => None,
         }
@@ -1371,6 +1380,7 @@ impl FFIValue {
             FFIValue::BoolV(_)
             | FFIValue::IntV(_)
             | FFIValue::StringV(_)
+            | FFIValue::SymbolV(_)
             | FFIValue::CharV { .. }
             | FFIValue::ByteVector(_) => true,
             _ => false,
@@ -1397,12 +1407,16 @@ impl std::hash::Hash for FFIValue {
                 state.write_u8(3);
                 s.hash(state)
             }
-            FFIValue::CharV { c } => {
+            FFIValue::SymbolV(s) => {
                 state.write_u8(4);
+                s.hash(state)
+            }
+            FFIValue::CharV { c } => {
+                state.write_u8(5);
                 c.hash(state)
             }
             FFIValue::ByteVector(b) => {
-                state.write_u8(5);
+                state.write_u8(6);
                 b.hash(state);
             }
             _ => panic!("Cannot hash this value: {:?}", self),
@@ -1417,6 +1431,7 @@ impl PartialEq for FFIValue {
             (Self::BoolV(l), Self::BoolV(r)) => l == r,
             (Self::IntV(l), Self::IntV(r)) => l == r,
             (Self::StringV(l), Self::StringV(r)) => l == r,
+            (Self::SymbolV(l), Self::SymbolV(r)) => l == r,
             (Self::CharV { c: l }, Self::CharV { c: r }) => l == r,
             (Self::Void, Self::Void) => true,
             (Self::Vector(l), Self::Vector(r)) => l == r,
@@ -1439,6 +1454,7 @@ impl std::fmt::Debug for FFIValue {
             FFIValue::CharV { c } => write!(f, "{}", c),
             FFIValue::Void => write!(f, "#<void>"),
             FFIValue::StringV(s) => write!(f, "{}", s),
+            FFIValue::SymbolV(s) => write!(f, "'{}", s),
             FFIValue::Vector(v) => write!(f, "{:?}", v),
             FFIValue::HashMap(h) => write!(f, "{:?}", h),
             FFIValue::Future { .. } => write!(f, "#<future>"),
@@ -1536,6 +1552,7 @@ impl IntoSteelVal for FFIValue {
             Self::Void => Ok(SteelVal::Void),
             // TODO: I think this might clone the string, its also a little suspect
             Self::StringV(s) => Ok(SteelVal::StringV(s.into_string().into())),
+            Self::SymbolV(s) => Ok(SteelVal::SymbolV(s.into_string().into())),
 
             // Vectors... can probably turn directly into vectors?
             Self::Vector(v) => v
@@ -1658,6 +1675,8 @@ fn into_ffi_value(value: SteelVal) -> Result<FFIValue> {
         // TODO:
         // Don't copy the string unless we have to!
         SteelVal::StringV(s) => Ok(FFIValue::StringV(s.as_str().into())),
+
+        SteelVal::SymbolV(s) => Ok(FFIValue::SymbolV(s.as_str().into())),
 
         SteelVal::Custom(c) => {
             let mut guard = c.write();
@@ -1891,6 +1910,8 @@ fn as_ffi_argument(value: &SteelVal) -> Result<FFIArg<'_>> {
         // Don't copy the string unless we have to!
         // SteelVal::StringV(s) => Ok(FFIValue::StringV(s.as_str().into())),
         SteelVal::StringV(s) => Ok(FFIArg::StringRef(RStr::from_str(s.as_str()))),
+
+        SteelVal::SymbolV(s) => Ok(FFIArg::SymbolV(s.as_str().into())),
 
         _ => {
             stop!(TypeMismatch => "Cannot proceed with the conversion from steelval to FFI Value. This will only succeed for a subset of values deemed as FFI-safe-enough: {:?}", value)
